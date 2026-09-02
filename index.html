@@ -7,13 +7,10 @@
 <meta name="description" content="Pat Enterprises management — bookings, quotations, invoices and delivery tracking in one dashboard." />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c9a24b' stroke-width='1.8'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='M14.31 8l5.74 9.94M9.69 8h11.48M7.38 12l5.74-9.94M9.69 16L3.95 6.06M14.31 16H2.83M16.62 12l-5.74 9.94'/%3E%3C/svg%3E" />
 
-<!-- Fonts: preconnect + link (starts downloading immediately, before any JS runs) -->
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,500&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
 
-<!-- Import map: lets the unmodified `import ... from "react"` etc. statements
-     in the original JSX resolve to real ES module builds in the browser. -->
 <script type="importmap">
 {
   "imports": {
@@ -22,14 +19,11 @@
     "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
     "recharts": "https://esm.sh/recharts@2.12.7?external=react,react-dom",
     "lucide-react": "https://esm.sh/lucide-react@0.436.0?external=react,react-dom",
-    "firebase/app": "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js",
-    "firebase/auth": "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js",
     "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2"
   }
 }
 </script>
 
-<!-- Babel Standalone: compiles the JSX in the module script below, in the browser -->
 <script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
 
 <style>
@@ -52,50 +46,18 @@ import {
   ArrowUpRight, Coins, PiggyBank, Camera, Clock3, CheckCircle2, Loader2, Menu,
   Download, Upload, Send, AlertTriangle, Package, Receipt,
 } from "lucide-react";
-import { initializeApp } from "firebase/app";
-import {
-  getAuth, onAuthStateChanged, signInWithEmailAndPassword,
-  createUserWithEmailAndPassword, signInWithPopup, GoogleAuthProvider, signOut as fbSignOut,
-} from "firebase/auth";
 import { createClient } from "@supabase/supabase-js";
 
 /* ────────────────────────────────────────────────────────────────────────
-   FIREBASE — auth backend
+   SUPABASE — auth AND data store (studio_data table, one row per owner_email)
+   Supabase Auth is the single identity provider now (email/password + Google
+   OAuth). supabase-js manages the signed-in session and attaches it to every
+   request automatically — no manual token-passing needed, unlike the old
+   Firebase-as-third-party-auth setup.
    ──────────────────────────────────────────────────────────────────────── */
-const firebaseConfig = {
-  apiKey: "AIzaSyBTtbkOaeQfl0leWLPd-H1-uLh6qneNJR8",
-  authDomain: "vg-creative-studio.firebaseapp.com",
-  projectId: "vg-creative-studio",
-  storageBucket: "vg-creative-studio.firebasestorage.app",
-  messagingSenderId: "971333605723",
-  appId: "1:971333605723:web:054d4ea078e74c38bbe27e",
-  measurementId: "G-XYRGPX0LXD",
-};
-const firebaseApp = initializeApp(firebaseConfig);
-const fbAuth = getAuth(firebaseApp);
-const googleProvider = new GoogleAuthProvider();
-
-/* ────────────────────────────────────────────────────────────────────────
-   SUPABASE — shared data store (studio_data table, one row per owner_email)
-   Auth stays on Firebase; this is used purely as the database so bookings,
-   quotations, invoices etc. sync across devices/users instead of living in
-   a single browser's localStorage.
-
-   The accessToken function below is what makes Supabase's Row Level
-   Security actually mean something: on every request, it fetches the
-   CURRENT signed-in Firebase user's ID token and hands it to Supabase.
-   Supabase (via the Firebase Third-Party Auth integration configured in
-   the dashboard) verifies that token and knows exactly who's asking —
-   instead of just seeing the bare public key, which any inspected page
-   reveals to anyone. Without this, RLS has no identity to check against. */
 const supabase = createClient(
-  "https://zegwpgvifwqvlnsjavxt.supabase.co",
-  "sb_publishable_i6GmJ4Pv1wsJhwvUzZpgiQ_bNjqQ1Rg",
-  {
-    accessToken: async () => {
-      return (await fbAuth.currentUser?.getIdToken(/* forceRefresh */ false)) ?? null;
-    },
-  }
+  "https://rlyuaizwzpzcvxhygrnk.supabase.co",
+  "sb_publishable_yhoEs5cOs5WzhYJVtg1shA_-KdDosaP"
 );
 
 /* Only these emails may access the studio dashboard. Checked right after
@@ -113,37 +75,20 @@ const ALLOWED_EMAILS = [
 
 const isAllowedEmail = (email) => !!email && ALLOWED_EMAILS.includes(email.toLowerCase());
 
-/* Turns Firebase's error codes into copy a user can actually act on. */
-function friendlyAuthError(code) {
-  switch (code) {
-    case "auth/invalid-email": return "That email address doesn't look right.";
-    case "auth/user-disabled": return "This account has been disabled.";
-    case "auth/user-not-found": return "No account found with that email. Try creating one instead.";
-    case "auth/wrong-password":
-    case "auth/invalid-credential": return "Incorrect email or password.";
-    case "auth/email-already-in-use": return "An account already exists with that email. Try signing in instead.";
-    case "auth/weak-password": return "Password should be at least 6 characters.";
-    case "auth/popup-closed-by-user": return "Google sign-in was closed before finishing.";
-    case "auth/network-request-failed": return "Network error — check your connection and try again.";
-    case "auth/too-many-requests": return "Too many attempts. Wait a moment and try again.";
-    default: return "Something went wrong signing in. Please try again.";
-  }
+/* Turns Supabase Auth's error messages into copy a user can actually act
+   on. Supabase gives a message string rather than Firebase's stable error
+   codes, so this matches on message text instead of a switch on codes. */
+function friendlyAuthError(message) {
+  const m = (message || "").toLowerCase();
+  if (m.includes("invalid login credentials")) return "Incorrect email or password.";
+  if (m.includes("email not confirmed")) return "Please confirm your email before signing in — check your inbox.";
+  if (m.includes("already registered")) return "An account already exists with that email. Try signing in instead.";
+  if (m.includes("password should be at least")) return "Password should be at least 6 characters.";
+  if (m.includes("unable to validate email") || m.includes("invalid email")) return "That email address doesn't look right.";
+  if (m.includes("network")) return "Network error — check your connection and try again.";
+  if (m.includes("rate limit") || m.includes("too many")) return "Too many attempts. Wait a moment and try again.";
+  return message || "Something went wrong signing in. Please try again.";
 }
-
-/* ────────────────────────────────────────────────────────────────────────
-   PAT ENTERPRISES — MANAGEMENT
-   Design tokens
-   • Display: "Fraunces" — warm, editorial serif with real personality
-   • Body/UI: "Inter"
-   • Data/mono: "IBM Plex Mono" — for money, IDs, reference numbers
-   • Palette: near-black ink, antique gold accent, warm parchment (light mode)
-   • Signature: an aperture-iris mark used as brand glyph + loading state,
-     status "shutter" dots, and a film-tick progress bar
-   ──────────────────────────────────────────────────────────────────────── */
-
-/* Fonts are now preconnected + <link>-loaded from the HTML <head> instead of
-   a CSS @import, so they start downloading immediately instead of waiting
-   for React/Babel to parse and mount before the request even fires. */
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 const todayISO = () => new Date().toISOString().slice(0, 10);
@@ -165,21 +110,14 @@ const daysBetween = (iso) => {
   return Math.round((now - then) / 86400000);
 };
 
-/* An invoice is overdue once its due date has passed and it still has a
-   balance outstanding — paid/cancelled invoices are never overdue. */
 const isInvoiceOverdue = (inv) =>
   !!inv.dueDate && inv.dueDate < todayISO() && (inv.status === "unpaid" || inv.status === "partial");
 const effectiveInvoiceStatus = (inv) => (isInvoiceOverdue(inv) ? "overdue" : inv.status);
 
-/* A quotation expires once its "valid until" date passes while it's still
-   sitting as a draft — once accepted or invoiced it's no longer just an
-   open offer, so it stops being eligible to "expire". */
 const isQuoteExpired = (q) =>
   !!q.validUntil && q.validUntil < todayISO() && q.status === "draft";
 const effectiveQuoteStatus = (q) => (isQuoteExpired(q) ? "expired" : q.status);
 
-/* Every generated invoice gets a matching project, dated to the day the
-   invoice was raised, so production tracking always has a home. */
 const makeProjectFromInvoice = ({ client, title, shootDate, invoiceId, bookingId, quotationId }) => ({
   id: uid(),
   title: title || (client ? `${client.name} — shoot` : "Untitled project"),
@@ -190,11 +128,6 @@ const makeProjectFromInvoice = ({ client, title, shootDate, invoiceId, bookingId
   invoiceId, bookingId, quotationId,
 });
 
-/* Nudges the project tied to an invoice forward along its stages as the
-   client pays: half paid means the shoot itself is done and it's now in
-   post-production ("shooting" stage, 50%), fully paid marks the whole
-   project complete. Never moves a project backwards — editing an earlier
-   payment down, or deleting one, won't un-complete or un-shoot a project. */
 const PROJECT_STATUS_ORDER = ["planning", "shooting", "editing", "completed"];
 
 const paymentMilestoneStatus = (paidPct) => {
@@ -214,9 +147,6 @@ const syncProjectWithPayment = (projects, invoiceId, paidPct) => {
   });
 };
 
-/* Gear double-booking: for each active (non-cancelled) booking date, tally
-   how many bookings need each gear item that day and compare against how
-   many of that item the studio actually owns. */
 function computeGearConflicts(bookings, gear) {
   const byDateGear = {};
   bookings.forEach((b) => {
@@ -381,9 +311,6 @@ function buildDocHTML({ docType, number, statusLabel, dateLabel, dateValue, seco
 </body></html>`;
 }
 
-/* Payment receipt — deliberately separate from buildDocHTML: a receipt is
-   about one payment event (what was just paid, and what's still owed), not
-   a line-itemised document, so it gets its own compact layout. */
 function buildReceiptHTML({ receiptNumber, date, client, invoiceNumber, amountPaid, invoiceTotal, paidToDate, balanceRemaining, method, items }) {
   const paidInFull = balanceRemaining <= 0;
   const lineItems = items || [];
@@ -520,10 +447,10 @@ async function savePersisted(key, value) {
 }
 
 /* ---------------------- Supabase-backed studio data -----------------------
-   Replaces localStorage for the actual business data (clients, projects,
-   quotations, invoices, expenses, equipment, hires) so it's shared across
-   devices/users instead of stuck in one browser. Keyed by the signed-in
-   Firebase user's email. Theme preference stays in localStorage — it's a
+   Studio business data (clients, projects, quotations, invoices, expenses,
+   equipment, hires) lives in Supabase's studio_data table, keyed by the
+   signed-in user's email, so it's shared across devices/users instead of
+   stuck in one browser. Theme preference stays in localStorage — it's a
    per-device UI setting, not something that needs to sync. --------------- */
 async function loadStudioData(email) {
   try {
@@ -721,8 +648,6 @@ function CategorySelect({ value, builtIn, custom, onChange, onAddCategory, onDel
   );
 }
 
-/* Appends a new custom category (deduped, ignoring case) to the given
-   bucket ("gear" | "equipment" | "expense") in customCategories. */
 function addCustomCategory(mutate, bucket, name) {
   mutate((d) => {
     const existing = (d.customCategories && d.customCategories[bucket]) || [];
@@ -734,9 +659,6 @@ function addCustomCategory(mutate, bucket, name) {
   });
 }
 
-/* Removes a custom category from the given bucket. Items that already used
-   it keep the stored string as-is (see CategorySelect's fallback logic) —
-   this only stops it being offered as a choice going forward. */
 function removeCustomCategory(mutate, bucket, name) {
   mutate((d) => {
     const existing = (d.customCategories && d.customCategories[bucket]) || [];
@@ -761,9 +683,6 @@ function ClientSelect({ value, clients, onChange }) {
   );
 }
 
-/* Existing-or-new client picker, reused on Projects, Quotations and Invoices.
-   Lets a document be raised for a brand-new client without visiting the CRM
-   first — the client is saved to the CRM the moment the document is created. */
 function ClientPicker({ clients, mode, onModeChange, clientId, onClientIdChange, newClient, onNewClientChange }) {
   return (
     <>
@@ -831,12 +750,13 @@ function EmptyState({ icon: Icon, title, body, actionLabel, onAction }) {
 
 /* ================================ LOGIN ================================== */
 
-function LoginScreen({ onSignIn }) {
+function LoginScreen() {
   const [mode, setMode] = useState("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [info, setInfo] = useState("");
 
   const submit = async (e) => {
     e && e.preventDefault();
@@ -844,26 +764,41 @@ function LoginScreen({ onSignIn }) {
       setError("Enter an email and password to continue.");
       return;
     }
+    if (!isAllowedEmail(email.trim())) {
+      setError("This email doesn't have access to Pat Enterprises Studio.");
+      return;
+    }
     if (mode === "signup" && password.length < 6) {
       setError("Password should be at least 6 characters.");
       return;
     }
     setError("");
+    setInfo("");
     setBusy(true);
     try {
-      let cred;
       if (mode === "signin") {
-        cred = await signInWithEmailAndPassword(fbAuth, email.trim(), password);
+        const { error: signInError } = await supabase.auth.signInWithPassword({
+          email: email.trim(),
+          password,
+        });
+        if (signInError) throw signInError;
+        // Otherwise the onAuthStateChange listener in App picks up the session.
       } else {
-        cred = await createUserWithEmailAndPassword(fbAuth, email.trim(), password);
+        const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+          email: email.trim(),
+          password,
+        });
+        if (signUpError) throw signUpError;
+        // If the project has email confirmations turned on, there's no
+        // session yet right after signUp — let the person know to check
+        // their inbox instead of silently doing nothing.
+        if (signUpData?.user && !signUpData.session) {
+          setInfo("Account created — check your email to confirm it, then sign in.");
+          setMode("signin");
+        }
       }
-      if (!isAllowedEmail(cred.user.email)) {
-        await fbSignOut(fbAuth);
-        setError("This email doesn't have access to Pat Enterprises Studio.");
-      }
-      // Otherwise onSignIn is a no-op — App's onAuthStateChanged listener picks up the change.
     } catch (err) {
-      setError(friendlyAuthError(err.code));
+      setError(friendlyAuthError(err.message));
     } finally {
       setBusy(false);
     }
@@ -871,18 +806,26 @@ function LoginScreen({ onSignIn }) {
 
   const google = async () => {
     setError("");
+    setInfo("");
     setBusy(true);
     try {
-      const cred = await signInWithPopup(fbAuth, googleProvider);
-      if (!isAllowedEmail(cred.user.email)) {
-        await fbSignOut(fbAuth);
-        setError("This email doesn't have access to Pat Enterprises Studio.");
-      }
+      // Supabase OAuth is a redirect flow (not a popup like Firebase) — the
+      // browser leaves the page, Google shows its consent screen, then sends
+      // the person back to redirectTo with the session attached. The email
+      // allowlist check happens after the redirect completes, in App's
+      // onAuthStateChange handler, since there's no user object to check yet
+      // at this point.
+      const { error: oauthError } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: { redirectTo: window.location.href },
+      });
+      if (oauthError) throw oauthError;
     } catch (err) {
-      setError(friendlyAuthError(err.code));
-    } finally {
+      setError(friendlyAuthError(err.message));
       setBusy(false);
     }
+    // No finally/setBusy(false) on the success path — the page navigates
+    // away to Google before it would matter.
   };
 
   return (
@@ -935,6 +878,7 @@ function LoginScreen({ onSignIn }) {
           </Field>
 
           {error && <div className="vg-form-error">{error}</div>}
+          {info && !error && <div className="vg-form-hint" style={{ marginBottom: 4 }}>{info}</div>}
 
           <button className="vg-btn vg-btn--gold vg-btn--block" type="submit" disabled={busy}>
             {busy ? <Loader2 size={16} className="vg-spin-icon" /> : null}
@@ -967,11 +911,6 @@ function Dashboard({ data, onNavigate }) {
   const [trendYear, setTrendYear] = useState(() => new Date().getFullYear());
   const [monthDetail, setMonthDetail] = useState(null); // { year, month } — month is 0-indexed
 
-  /* Equipment hire invoices are split out and kept out of every other
-     dashboard figure — revenue collected, outstanding, overdue, net profit,
-     the revenue trend and the expenditure donut all reflect bookings/
-     projects/other services only. Equipment's own collected/outstanding
-     numbers live solely in the dedicated Equipment profit card below. */
   const equipmentInvoices = useMemo(() => invoices.filter((i) => !!i.hireId), [invoices]);
   const equipmentInvoiceIds = useMemo(() => new Set(equipmentInvoices.map((i) => i.id)), [equipmentInvoices]);
   const otherInvoices = useMemo(() => invoices.filter((i) => !i.hireId), [invoices]);
@@ -980,9 +919,6 @@ function Dashboard({ data, onNavigate }) {
   const equipmentProfit = useMemo(() => equipmentInvoices.reduce((s, i) => s + Number(i.paid || 0), 0), [equipmentInvoices]);
   const equipmentOutstanding = useMemo(() => equipmentInvoices.reduce((s, i) => s + (Number(i.total || 0) - Number(i.paid || 0)), 0), [equipmentInvoices]);
 
-  // Revenue collected — pulled straight from payments recorded against paid
-  // invoices, so this figure (and everything derived from it below) always
-  // traces back to actual money received, not just invoiced amounts.
   const revenueCollected = useMemo(() => otherInvoices.reduce((s, i) => s + Number(i.paid || 0), 0), [otherInvoices]);
   const outstanding = useMemo(() => otherInvoices.reduce((s, i) => s + (Number(i.total || 0) - Number(i.paid || 0)), 0), [otherInvoices]);
   const totalCosts = useMemo(() => (expenses || []).reduce((s, e) => s + Number(e.amount || 0), 0), [expenses]);
@@ -998,8 +934,6 @@ function Dashboard({ data, onNavigate }) {
   const gearConflicts = useMemo(() => computeGearConflicts(bookings, gear || []), [bookings, gear]);
   const hasAlerts = overdueInvoices.length > 0 || expiredQuotes.length > 0 || gearConflicts.length > 0;
 
-  // Mini chart on the dashboard card — full current year, Jan through Dec,
-  // built from the same revenue-collected payments as the KPI above.
   const currentYear = new Date().getFullYear();
   const trend = useMemo(() => {
     const totals = Array(12).fill(0);
@@ -1012,8 +946,6 @@ function Dashboard({ data, onNavigate }) {
     return totals.map((value, m) => ({ month: new Date(currentYear, m, 1).toLocaleDateString("en-US", { month: "short" }), value }));
   }, [otherPayments, currentYear]);
 
-  // Full year-by-year breakdown for the "View year" drill-down — revenue
-  // collected, expenditure logged and the resulting profit, per month.
   const yearOverview = useMemo(() => {
     return Array.from({ length: 12 }, (_, m) => {
       const prefix = `${trendYear}-${String(m + 1).padStart(2, "0")}`;
@@ -1023,8 +955,6 @@ function Dashboard({ data, onNavigate }) {
     });
   }, [trendYear, otherPayments, expenses]);
 
-  // Transaction-level breakdown for whichever month is drilled into —
-  // who paid what, and where the money went.
   const monthTransactions = useMemo(() => {
     if (!monthDetail) return null;
     const prefix = `${monthDetail.year}-${String(monthDetail.month + 1).padStart(2, "0")}`;
@@ -1046,9 +976,6 @@ function Dashboard({ data, onNavigate }) {
     return { monthPayments, monthExpenses };
   }, [monthDetail, otherPayments, expenses, data.invoices, data.clients, data.projects]);
 
-  // Expenditure by category — same rounded donut style the dashboard used
-  // for invoice status, now showing where money actually went, in a
-  // distinct warm palette so it never reads as revenue.
   const EXPENSE_DONUT_COLORS = ["#c1554a", "#d9793f", "#b8894a", "#a5573f", "#8a6c53", "#b23b58"];
   const expenditureByCategory = useMemo(() => {
     const map = {};
@@ -1119,8 +1046,6 @@ function Dashboard({ data, onNavigate }) {
         ))}
       </div>
 
-      {/* Equipment profit — a standalone card, separate from the KPI grid
-          above on purpose, so it never reads as part of Net profit. */}
       <button type="button" className="vg-card vg-equip-profit-card" onClick={() => go("equipment")} title="View in Equipment">
         <div className="vg-equip-profit-head">
           <span className="vg-kpi-icon vg-kpi-icon--gold"><Camera size={16} strokeWidth={1.8} /></span>
@@ -1625,8 +1550,6 @@ function ServicesPage({ data, mutate, toast }) {
 
 const BOOKING_STATUSES = ["reserved", "confirmed", "completed", "cancelled"];
 
-/* Service picker for a booking — pulled straight from the Services catalogue
-   so a booking's price always traces back to a real package. */
 function ServiceSelect({ value, services, onChange }) {
   return (
     <div className="vg-select-wrap">
@@ -1675,10 +1598,6 @@ function BookingsPage({ data, mutate, toast, filter, onFilterChange, onNavigate 
 
   const isNew = (id) => !data.bookings.some((b) => b.id === id);
 
-  /* Folds the booking record and its expense rows into the shared store in
-     one go — the booking is the single place these get entered, but
-     expenses still live in the same data.expenses collection everything
-     else (dashboard totals, profit) already reads from. */
   const upsertBookingAndExpenses = (d, f) => {
     const svc = data.services.find((s) => s.id === f.serviceId);
     const cleanBooking = { ...f, category: svc ? svc.category : f.category };
@@ -1716,9 +1635,6 @@ function BookingsPage({ data, mutate, toast, filter, onFilterChange, onNavigate 
     mutate((d) => {
       const withClient = newClientRecord ? { ...d, clients: [newClientRecord, ...d.clients] } : d;
       const withBooking = upsertBookingAndExpenses(withClient, bookingForm);
-      // Auto-send to Invoices & Payments the first time a service is picked —
-      // if it's already been invoiced once, saving again just updates the
-      // booking/expenses and leaves the existing invoice alone.
       if (!svc || alreadyInvoiced) return withBooking;
       const client = newClientRecord || withClient.clients.find((c) => c.id === clientId);
       const number = `VGI-${String(d.invoiceSeq).padStart(6, "0")}`;
@@ -1933,9 +1849,6 @@ function BookingsPage({ data, mutate, toast, filter, onFilterChange, onNavigate 
 }
 
 /* ================================== GEAR =================================== */
-/* Equipment inventory, so bookings can be checked against what the studio
-   actually owns — two shoots on the same day both wanting the studio's one
-   gimbal is a real problem, and this is what surfaces it. */
 
 const blankGear = () => ({ id: null, name: "", category: "Camera", qtyOwned: 1 });
 const GEAR_CATEGORIES = ["Camera", "Lens", "Lighting", "Audio", "Stabiliser"];
@@ -2040,14 +1953,6 @@ function GearPage({ data, mutate, toast }) {
 }
 
 /* ============================== EQUIPMENT ================================== */
-/* Two distinct things live here, on purpose:
-   1. The equipment CATALOG — items available to hire out (photos, price,
-      serial, condition). Adding/editing/deleting one never touches a
-      customer.
-   2. A HIRE — a transaction: pick a customer, pick catalog equipment,
-      pick dates. Saving a hire is the only thing that raises an invoice,
-      and it's always for the full amount up front — no partial deposit,
-      the equipment doesn't go out until it's paid in full. */
 
 const EQUIPMENT_CATEGORIES = ["Camera", "Lens", "Lighting", "Audio", "Stabiliser"];
 const EQUIPMENT_STATUSES = ["available", "out", "maintenance"];
@@ -2077,23 +1982,9 @@ const hireTotal = (h, equipmentList) => {
   }, 0) * days;
 };
 
-/* A hire is overdue once it's still out with the customer past its return
-   date — reserved and already-returned hires are never overdue. */
 const isHireOverdue = (h) => h.status === "out" && !!h.endDate && h.endDate < todayISO();
 const effectiveHireStatus = (h) => (isHireOverdue(h) ? "overdue" : h.status);
 
-/* Swipeable/scrollable full-size viewer for an equipment item's photos —
-   opened by tapping the photo area on a catalog card. Scrolls horizontally
-   (touch swipe or the arrow buttons) through all photos for that item.
-
-   The scroll-position listener and the "scroll to this index" effect can
-   easily fight each other: a smooth programmatic scroll fires its own
-   intermediate scroll events, which — if read immediately — report the
-   wrong index mid-flight and re-trigger another scroll, which is what was
-   making this choppy and made the arrow buttons look like they'd stopped
-   working. Two things fix it: only read the scroll position once it has
-   actually settled (debounced), and ignore scroll events entirely while a
-   programmatic (button/dot triggered) scroll is still in flight. */
 function PhotoLightbox({ photos, index, onIndexChange }) {
   const trackRef = useRef(null);
   const settleTimer = useRef(null);
@@ -2155,14 +2046,12 @@ function EquipmentPage({ data, mutate, toast }) {
   const [equipModalOpen, setEquipModalOpen] = useState(false);
   const [equipForm, setEquipForm] = useState(null);
   const equipFileInputRef = useRef(null);
-  const [lightbox, setLightbox] = useState(null); // { eq, index }
+  const [lightbox, setLightbox] = useState(null);
 
   const [hireModalOpen, setHireModalOpen] = useState(false);
   const [hireForm, setHireForm] = useState(null);
   const [clientMode, setClientMode] = useState("existing");
   const [newClient, setNewClient] = useState(blankNewClient());
-
-  /* ---------------- equipment catalog: add / edit / delete ---------------- */
 
   const openNewEquipment = () => { setEquipForm(blankEquipment()); setEquipModalOpen(true); };
   const openEditEquipment = (eq) => { setEquipForm({ ...eq, dailyRate: String(eq.dailyRate) }); setEquipModalOpen(true); };
@@ -2204,8 +2093,6 @@ function EquipmentPage({ data, mutate, toast }) {
     }));
     toast("Equipment removed");
   };
-
-  /* -------------------------- hires: new / status / delete ------------------ */
 
   const openNewHire = () => {
     setHireForm(blankHireForm());
@@ -2395,7 +2282,6 @@ function EquipmentPage({ data, mutate, toast }) {
         )}
       </div>
 
-      {/* ---------------- equipment add/edit modal ---------------- */}
       <Modal open={equipModalOpen} onClose={() => setEquipModalOpen(false)} title={equipForm?.id ? "Edit equipment" : "Add equipment"}>
         {equipForm && (
           <div className="vg-form-grid">
@@ -2433,7 +2319,6 @@ function EquipmentPage({ data, mutate, toast }) {
         )}
       </Modal>
 
-      {/* ---------------- equipment photo lightbox ---------------- */}
       <Modal open={!!lightbox} onClose={() => setLightbox(null)} title={lightbox?.eq?.name || "Photos"} width={640} modalClassName="vg-modal--lightbox">
         {lightbox && (
           <PhotoLightbox
@@ -2444,7 +2329,6 @@ function EquipmentPage({ data, mutate, toast }) {
         )}
       </Modal>
 
-      {/* ---------------- new hire modal ---------------- */}
       <Modal open={hireModalOpen} onClose={() => setHireModalOpen(false)} title="New hire">
         {hireForm && (
           <div className="vg-form-grid">
@@ -2677,9 +2561,6 @@ function ProjectsPage({ data, mutate, toast, filter, onFilterChange }) {
 }
 
 /* ================================ EXPENSES ================================= */
-/* Job costs — gear hire, crew, transport, location fees — so the dashboard
-   can show actual profit (revenue collected minus what a shoot cost) rather
-   than treating "revenue collected" as if it were profit. */
 
 const EXPENSE_CATEGORIES = ["Gear hire", "Crew", "Transport", "Location"];
 const blankExpense = () => ({ id: null, category: "Gear hire", description: "", amount: "", date: todayISO(), projectId: "" });
@@ -3535,7 +3416,6 @@ function InvoicesPage({ data, mutate, toast, filter, onFilterChange }) {
         )}
       </div>
 
-      {/* ---- generate invoice ---- */}
       <Modal open={newModal} onClose={() => { setNewModal(false); setEditingInvoiceId(null); }} title={editingInvoiceId ? "Edit invoice" : "Generate invoice"} width={620}>
         {form && (
           <div className="vg-form-grid">
@@ -3589,7 +3469,6 @@ function InvoicesPage({ data, mutate, toast, filter, onFilterChange }) {
         )}
       </Modal>
 
-      {/* ---- view / generated document ---- */}
       <Modal open={!!viewInvoice} onClose={() => setViewInvoice(null)} title="" width={560}>
         {viewInvoice && (() => {
           const client = data.clients.find((c) => c.id === viewInvoice.clientId);
@@ -3801,28 +3680,28 @@ export default function App() {
       const savedTheme = await loadPersisted("vg_theme_v2", "dark");
       setTheme(savedTheme);
     })();
-    // Firebase is the single source of truth for auth state now — this fires
-    // once immediately with the current user (or null), then again on every
-    // sign-in / sign-out, including across tab refreshes.
-    const unsub = onAuthStateChanged(fbAuth, (user) => {
+
+    // Supabase Auth is the single source of truth for auth state now. This
+    // fires once immediately with whatever session already exists (e.g.
+    // after a Google OAuth redirect back to this page, or a returning
+    // signed-in visitor), then again on every sign-in / sign-out / token
+    // refresh — including the moment a Google OAuth redirect completes.
+    const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
+      const user = session?.user;
       if (user && isAllowedEmail(user.email)) {
-        // Force-refresh the ID token once on sign-in so a just-added
-        // "authenticated" role claim (see the one-time Firebase script)
-        // is picked up immediately, instead of waiting up to an hour for
-        // Firebase's normal token cache to expire.
-        user.getIdToken(/* forceRefresh */ true).catch(() => {});
         setAuthed(true); setEmail(user.email || "");
         setBooted(true);
       } else if (user) {
-        // A previously-active session whose email is no longer on the
-        // allowlist — sign them out rather than letting them in.
-        fbSignOut(fbAuth).finally(() => { setAuthed(false); setEmail(""); setBooted(true); });
+        // A signed-in user whose email isn't on the allowlist — sign them
+        // out rather than letting them in.
+        supabase.auth.signOut().finally(() => { setAuthed(false); setEmail(""); setBooted(true); });
       } else {
         setAuthed(false); setEmail("");
         setBooted(true);
       }
     });
-    return () => unsub();
+
+    return () => { authListener?.subscription?.unsubscribe(); };
   }, []);
 
   // Once we know who's signed in, load their studio's data from Supabase
@@ -3891,11 +3770,8 @@ export default function App() {
     reader.readAsText(file);
   }, [toast]);
 
-  // Kept as a no-op passthrough prop name for LoginScreen's onSignIn — actual
-  // auth state now comes from the onAuthStateChanged listener above.
-  const signIn = () => {};
   const signOut = () => {
-    fbSignOut(fbAuth).catch(() => {});
+    supabase.auth.signOut().catch(() => {});
   };
   const toggleTheme = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
 
@@ -3914,7 +3790,7 @@ export default function App() {
     <div className="vg-root" data-theme={theme}>
       <style>{CSS}</style>
       {!authed ? (
-        <LoginScreen onSignIn={signIn} />
+        <LoginScreen />
       ) : (
         <Shell email={email} onLogout={signOut} theme={theme} toggleTheme={toggleTheme} data={data} mutate={mutate} toast={toast} onExport={exportData} onImport={importData} />
       )}
@@ -3982,12 +3858,10 @@ const CSS = `
 .vg-spin-icon { animation: vg-spin 0.9s linear infinite; }
 .vg-aperture { color: var(--c-gold); display: inline-flex; }
 
-/* ---------- brand ---------- */
 .vg-brand { display: flex; align-items: center; gap: 12px; }
 .vg-brand-name { font-family: 'Fraunces', serif; font-size: 17px; font-weight: 600; letter-spacing: 0.01em; line-height: 1.1; }
 .vg-brand-sub { font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--c-muted); margin-top: 2px; }
 
-/* ---------- auth ---------- */
 .vg-auth { min-height: 100vh; display: grid; grid-template-columns: 1.1fr 1fr; }
 .vg-auth-brand { position: relative; background: radial-gradient(ellipse at 20% 0%, #171410 0%, #0a0a0b 55%), #0a0a0b; overflow: hidden; display: flex; align-items: center; padding: 64px; }
 .vg-auth-grain { position: absolute; inset: 0; opacity: 0.05; background-image: radial-gradient(#fff 0.6px, transparent 0.6px); background-size: 3px 3px; pointer-events: none; }
@@ -4013,7 +3887,6 @@ const CSS = `
   .vg-auth-brand { display: none; }
 }
 
-/* ---------- shell ---------- */
 .vg-shell { display: grid; grid-template-columns: 256px 1fr; min-height: 100vh; }
 .vg-sidebar { background: var(--c-bg); border-right: 1px solid var(--c-border-soft); padding: 26px 18px; display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh; }
 .vg-brand--sidebar { padding: 4px 6px 28px; }
@@ -4042,7 +3915,6 @@ const CSS = `
   .vg-content { padding: 68px 16px 48px; }
 }
 
-/* ---------- page ---------- */
 .vg-page { animation: vg-fade-up 0.35s ease both; display: flex; flex-direction: column; gap: 22px; min-height: calc(100vh - 96px); }
 .vg-card--grow { flex: 1 1 auto; display: flex; flex-direction: column; }
 .vg-card--grow .vg-empty { flex: 1; justify-content: center; }
@@ -4051,14 +3923,12 @@ const CSS = `
 .vg-page-head h1 { font-family: 'Fraunces', serif; font-size: 30px; font-weight: 600; margin: 0 0 6px; }
 .vg-page-head p { color: var(--c-muted); font-size: 14px; margin: 0; }
 
-/* ---------- cards ---------- */
 .vg-card { background: var(--c-surface); border: 1px solid var(--c-border); border-radius: 16px; padding: 22px; box-shadow: var(--shadow-sm); animation: vg-fade-up 0.4s ease both; }
 .vg-card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; gap: 12px; }
 .vg-card-head h3 { font-family: 'Fraunces', serif; font-size: 17px; font-weight: 600; margin: 0; }
 .vg-card-head p { color: var(--c-muted); font-size: 12.5px; margin: 3px 0 0; }
 .vg-card-head--split { flex-wrap: wrap; }
 
-/* ---------- kpis ---------- */
 .vg-kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
 .vg-kpi { padding: 20px; }
 .vg-kpi-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
@@ -4077,7 +3947,6 @@ const CSS = `
 .vg-kpi-link { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--c-muted); margin-top: 10px; opacity: 0; transition: opacity 0.15s ease; }
 .vg-kpi--clickable:hover .vg-kpi-link { opacity: 1; color: var(--c-gold-bright); }
 
-/* ---------- filter chips ---------- */
 .vg-filter-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
 .vg-filter-chips--tabs { margin-bottom: 4px; }
 .vg-chip { border: 1px solid var(--c-border); background: var(--c-bg-elev); color: var(--c-muted-strong); font-size: 12.5px; padding: 7px 14px; border-radius: 999px; cursor: pointer; transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease; }
@@ -4086,7 +3955,6 @@ const CSS = `
 .vg-chip--active { background: var(--c-gold); border-color: var(--c-gold); color: #1c1206; font-weight: 600; }
 .vg-form-hint { font-size: 12px; color: var(--c-muted); margin: 0; }
 
-/* ---------- dashboard grid ---------- */
 .vg-dash-grid { display: grid; grid-template-columns: 1.6fr 1fr; gap: 16px; align-items: stretch; }
 .vg-equip-profit-card { display: flex; flex-direction: column; gap: 16px; text-align: left; width: 100%; cursor: pointer; margin-bottom: 20px; border-color: var(--c-gold); }
 .vg-equip-profit-head { display: flex; align-items: flex-start; gap: 10px; }
@@ -4099,11 +3967,9 @@ const CSS = `
 .vg-chart-wrap--clickable { cursor: pointer; border-radius: 10px; transition: background 0.15s ease; }
 .vg-chart-wrap--clickable:hover { background: var(--c-surface-2); }
 
-/* ---------- dashboard: calendar + upcoming, side by side ---------- */
 .vg-dash-grid--cal { grid-template-columns: 0.95fr 1.05fr; align-items: start; }
 @media (max-width: 980px) { .vg-dash-grid--cal { grid-template-columns: 1fr; } }
 
-/* ---------- booking calendar ---------- */
 .vg-calendar-nav { display: flex; align-items: center; gap: 8px; }
 .vg-calendar-month { font-size: 13px; font-weight: 600; color: var(--c-text); min-width: 128px; text-align: center; }
 .vg-calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin-top: 4px; }
@@ -4139,7 +4005,6 @@ const CSS = `
 .vg-mini-row-main span { font-size: 12px; color: var(--c-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vg-mini-row-date { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--c-muted-strong); flex-shrink: 0; }
 
-/* ---------- buttons ---------- */
 .vg-btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 10px 16px; border-radius: 10px; border: 1px solid var(--c-border); background: var(--c-surface-2); color: var(--c-text); font-size: 13.5px; font-weight: 600; font-family: 'Inter', sans-serif; cursor: pointer; transition: transform 0.12s ease, background 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease; }
 .vg-btn:hover { transform: translateY(-1px); }
 .vg-btn:active { transform: translateY(0); }
@@ -4155,7 +4020,6 @@ const CSS = `
 .vg-icon-btn--danger:hover { color: var(--c-danger); border-color: var(--c-danger); }
 .vg-icon-btn--active { color: var(--c-gold-bright); border-color: var(--c-gold); background: rgba(201,162,75,0.14); }
 
-/* ---------- forms ---------- */
 .vg-field { display: flex; flex-direction: column; gap: 6px; }
 .vg-field-label { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--c-muted); }
 .vg-input { background: var(--c-bg-elev); border: 1px solid var(--c-border); border-radius: 9px; padding: 10px 12px; color: var(--c-text); font-family: 'Inter', sans-serif; font-size: 13.5px; outline: none; transition: border-color 0.15s ease, box-shadow 0.15s ease; width: 100%; }
@@ -4181,7 +4045,6 @@ const CSS = `
 .vg-search { display: flex; align-items: center; gap: 8px; background: var(--c-bg-elev); border: 1px solid var(--c-border); border-radius: 9px; padding: 8px 12px; color: var(--c-muted); width: 220px; }
 .vg-search input { background: none; border: none; outline: none; color: var(--c-text); font-size: 13px; width: 100%; font-family: 'Inter', sans-serif; }
 
-/* ---------- pills / status ---------- */
 .vg-pill { display: inline-flex; align-items: center; padding: 4px 11px; border-radius: 999px; font-size: 11.5px; font-weight: 600; text-transform: capitalize; border: 1px solid transparent; }
 .vg-pill--reserved, .vg-pill--planning, .vg-pill--shooting { background: rgba(201,162,75,0.14); color: var(--c-gold-bright); border-color: rgba(201,162,75,0.3); }
 .vg-pill--confirmed, .vg-pill--editing, .vg-pill--out { background: rgba(90,140,220,0.14); color: #8fb4ea; border-color: rgba(90,140,220,0.3); }
@@ -4189,7 +4052,6 @@ const CSS = `
 .vg-pill--cancelled, .vg-pill--overdue, .vg-pill--expired { background: rgba(193,85,74,0.14); color: #e39089; border-color: rgba(193,85,74,0.3); }
 .vg-pill--partial, .vg-pill--draft, .vg-pill--invoiced, .vg-pill--unpaid, .vg-pill--maintenance { background: rgba(201,162,75,0.1); color: var(--c-warn); border-color: rgba(201,162,75,0.25); }
 
-/* ---------- tables ---------- */
 .vg-table { display: flex; flex-direction: column; }
 .vg-tr { display: grid; gap: 10px; align-items: center; padding: 14px 6px; border-top: 1px solid var(--c-border-soft); }
 .vg-tr:first-child { border-top: none; }
@@ -4212,7 +4074,6 @@ const CSS = `
 .vg-cell-sub { font-size: 12px; color: var(--c-muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vg-cell-sub--danger { color: #e39089; font-weight: 600; }
 
-/* ---------- alert banner (overdue / expired / gear conflicts) ---------- */
 .vg-alert-banner { display: flex; gap: 12px; align-items: flex-start; background: rgba(193,85,74,0.1); border: 1px solid rgba(193,85,74,0.3); color: #e39089; border-radius: 12px; padding: 13px 16px; }
 .vg-alert-banner svg { flex-shrink: 0; margin-top: 2px; }
 .vg-alert-banner strong { display: block; color: var(--c-text); font-size: 13.5px; margin-bottom: 4px; }
@@ -4220,12 +4081,10 @@ const CSS = `
 .vg-alert-link { background: none; border: none; padding: 0; font: inherit; color: inherit; text-align: left; cursor: pointer; text-decoration: underline; text-decoration-color: rgba(227,144,137,0.4); }
 .vg-alert-link:hover { text-decoration-color: #e39089; }
 
-/* ---------- gear checkbox list (booking form) ---------- */
 .vg-gear-check-list { display: flex; flex-direction: column; gap: 8px; max-height: 180px; overflow-y: auto; }
 .vg-gear-check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--c-text); cursor: pointer; }
 .vg-gear-check input { accent-color: var(--c-gold); width: 15px; height: 15px; }
 
-/* ---------- inline expenses editor (booking form) ---------- */
 .vg-booking-expenses { display: flex; flex-direction: column; gap: 8px; }
 .vg-booking-expense-row { display: grid; grid-template-columns: 1fr 1.4fr 0.8fr auto; gap: 8px; align-items: center; }
 @media (max-width: 560px) { .vg-booking-expense-row { grid-template-columns: 1fr 1fr; grid-template-areas: "cat cat" "desc desc" "amt del"; } }
@@ -4239,7 +4098,6 @@ const CSS = `
   .vg-td--actions, .vg-td--actions-wide { grid-column: 1 / -1; justify-content: flex-start; }
 }
 
-/* ---------- services ---------- */
 .vg-service-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
 @media (max-width: 900px) { .vg-service-grid { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 600px) { .vg-service-grid { grid-template-columns: 1fr; } }
@@ -4255,7 +4113,6 @@ const CSS = `
 .vg-price { color: var(--c-gold-bright); font-weight: 600; font-size: 15px; }
 .vg-service-meta { font-size: 11.5px; color: var(--c-muted); }
 
-/* ---------- projects ---------- */
 .vg-project-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
 @media (max-width: 900px) { .vg-project-grid { grid-template-columns: 1fr; } }
 .vg-project-card { display: flex; flex-direction: column; gap: 12px; }
@@ -4272,7 +4129,6 @@ const CSS = `
 .vg-project-controls { display: flex; gap: 10px; margin-top: 4px; }
 .vg-project-controls .vg-select-wrap { flex: 1; }
 
-/* ---------- equipment catalog ---------- */
 .vg-equip-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
 @media (max-width: 900px) { .vg-equip-grid { grid-template-columns: 1fr; } }
 .vg-equip-card { padding: 0; overflow: hidden; }
@@ -4284,7 +4140,6 @@ const CSS = `
 .vg-equip-photo-grid img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .vg-hire-body { display: flex; flex-direction: column; gap: 12px; padding: 16px; }
 
-/* photo upload slots, used on the Add/Edit equipment form (up to 4 photos) */
 .vg-photo-grid { display: flex; gap: 8px; flex-wrap: wrap; }
 .vg-photo-slot { position: relative; width: 64px; height: 64px; border-radius: 10px; overflow: hidden; background: var(--c-surface-2); border: 1px solid var(--c-border); }
 .vg-photo-slot img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -4305,7 +4160,6 @@ const CSS = `
 .vg-lightbox-dot--active { background: var(--c-gold); }
 .vg-photo-remove { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border-radius: 50%; background: rgba(6,6,7,0.7); color: #fff; border: none; display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; }
 
-/* equipment picker inside the New hire modal */
 .vg-hire-equip-list { display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow-y: auto; border: 1px solid var(--c-border-soft); border-radius: 10px; padding: 6px; }
 .vg-hire-equip-row { display: flex; align-items: center; gap: 10px; padding: 8px 6px; border-radius: 8px; }
 .vg-hire-equip-row:hover { background: var(--c-surface-2); }
@@ -4313,17 +4167,14 @@ const CSS = `
 .vg-hire-equip-name { flex: 1; font-size: 13.5px; }
 .vg-input--qty { width: 56px; flex: none; text-align: center; padding: 6px 4px; }
 
-/* ---------- hires table ---------- */
 .vg-tr--hires { grid-template-columns: 1.2fr 1.6fr 1.3fr 0.9fr 1.1fr 0.9fr auto; }
 
-/* ---------- history ---------- */
 .vg-history { display: flex; flex-direction: column; }
 .vg-history-row { display: flex; align-items: center; justify-content: space-between; padding: 13px 4px; border-top: 1px solid var(--c-border-soft); }
 .vg-history-row:first-child { border-top: none; }
 .vg-history-row-right { display: flex; align-items: center; gap: 8px; }
 .vg-pay-balance { display: flex; justify-content: space-between; align-items: center; background: var(--c-surface-2); border-radius: 10px; padding: 12px 14px; font-size: 13px; }
 
-/* ---------- invoice generator ---------- */
 .vg-link { background: none; border: none; padding: 0; color: var(--c-gold-bright); font-family: 'IBM Plex Mono', monospace; font-size: 13px; cursor: pointer; text-decoration: none; }
 .vg-link:hover { text-decoration: underline; }
 .vg-form-row { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 12px; }
@@ -4345,21 +4196,18 @@ const CSS = `
 .vg-invoice-doc-balance { font-size: 15px !important; color: var(--c-text) !important; font-weight: 700; padding-top: 8px; border-top: 1px dashed var(--c-border); }
 .vg-invoice-doc-balance span:last-child { color: var(--c-gold-bright); }
 
-/* ---------- empty state ---------- */
 .vg-empty { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 42px 20px; gap: 6px; }
 .vg-empty--tight { padding: 20px; }
 .vg-empty-icon { width: 44px; height: 44px; border-radius: 12px; background: var(--c-surface-2); color: var(--c-gold); display: flex; align-items: center; justify-content: center; margin-bottom: 8px; }
 .vg-empty h4 { font-family: 'Fraunces', serif; font-size: 16px; margin: 0; }
 .vg-empty p { color: var(--c-muted); font-size: 13px; max-width: 320px; margin: 0 0 8px; }
 
-/* ---------- modal ---------- */
 .vg-modal-scrim { position: fixed; inset: 0; background: rgba(6,6,7,0.6); backdrop-filter: blur(3px); display: flex; align-items: flex-start; justify-content: center; z-index: 100; padding: 20px; overflow-y: auto; animation: vg-fade-in 0.18s ease both; }
 .vg-modal { width: 100%; background: var(--c-bg-elev); border: 1px solid var(--c-border); border-radius: 16px; box-shadow: var(--shadow-lg); animation: vg-scale-in 0.22s cubic-bezier(.2,.8,.2,1) both; margin: auto 0; }
 .vg-modal-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--c-border-soft); background: var(--c-bg-elev); }
 .vg-modal-head h3 { font-family: 'Fraunces', serif; font-size: 17px; margin: 0; }
 .vg-modal-body { padding: 14px 18px; }
 
-/* compact spacing inside modals so forms fit without internal scrolling */
 .vg-modal .vg-form-grid { gap: 10px; }
 .vg-modal .vg-field { gap: 4px; }
 .vg-modal .vg-field-label { font-size: 10.5px; }
@@ -4394,12 +4242,10 @@ const CSS = `
   .vg-modal .vg-form-hint { font-size: 10.5px; }
 }
 
-/* ---------- toast ---------- */
 .vg-toast-stack { position: fixed; top: 20px; right: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 200; }
 .vg-toast { display: flex; align-items: center; gap: 9px; background: var(--c-bg-elev); border: 1px solid rgba(78,159,110,0.35); color: var(--c-text); padding: 11px 16px; border-radius: 11px; font-size: 13px; box-shadow: var(--shadow-lg); animation: vg-toast-in 0.25s cubic-bezier(.2,.8,.2,1) both; }
 .vg-toast svg { color: var(--c-good); flex-shrink: 0; }
 
-/* ---------- scrollbar ---------- */
 * { scrollbar-width: thin; scrollbar-color: var(--c-border) transparent; }
 ::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-thumb { background: var(--c-border); border-radius: 8px; }
@@ -4409,12 +4255,11 @@ const CSS = `
 }
 `;
 
-/* ------------------------------------------------------------------
-   Mount call added so this runs as a standalone page. Nothing above
-   this comment was changed from the original vg-creatives-studio.jsx.
------------------------------------------------------------------- */
 import { createRoot } from "react-dom/client";
 createRoot(document.getElementById("root")).render(<App />);
 </script>
+</body>
+</html>
+
 </body>
 </html>
